@@ -441,18 +441,29 @@
                                         textAlign: 'center'
                                     }}>
                                         {ad.creativeAsset && !imageErrors[ad.rowIndex] ? (
-                                            <img
-                                                src={ad.creativeAsset}
-                                                alt="Ad creative"
-                                                style={{
-                                                    maxWidth: '100%',
-                                                    maxHeight: '200px',
-                                                    borderRadius: '4px',
-                                                    display: 'block',
-                                                    margin: '0 auto'
-                                                }}
-                                                onError={() => handleImageError(ad.rowIndex)}
-                                            />
+                                            <a 
+                                                href={ad.creativeAsset} 
+                                                target="_blank" 
+                                                rel="noopener noreferrer"
+                                                style={{ cursor: 'pointer', display: 'block' }}
+                                            >
+                                                <img
+                                                    src={ad.creativeAsset}
+                                                    alt="Ad creative"
+                                                    style={{
+                                                        maxWidth: '100%',
+                                                        maxHeight: '400px',
+                                                        borderRadius: '4px',
+                                                        display: 'block',
+                                                        margin: '0 auto',
+                                                        transition: 'opacity 0.2s',
+                                                        cursor: 'pointer'
+                                                    }}
+                                                    onError={() => handleImageError(ad.rowIndex)}
+                                                    onMouseOver={(e) => e.target.style.opacity = '0.85'}
+                                                    onMouseOut={(e) => e.target.style.opacity = '1'}
+                                                />
+                                            </a>
                                         ) : ad.creativeAsset && imageErrors[ad.rowIndex] ? (
                                             <div style={{ padding: '40px', color: '#ef4444' }}>
                                                 <div style={{ marginBottom: '8px' }}>
