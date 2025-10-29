@@ -44,24 +44,24 @@
         // ===== CONFIGURATION - UPDATE THESE VALUES =====
         const CONFIG = {
             // Google Sheets Configuration
-            SHEET_ID: '1OQxNLz4IuwsVOSVBTOyvZK-a_9mog81Cns5XGZYBFXU',  // Get from your sheet URL
-            API_KEY: 'AIzaSyABznAS0fH0tYNh6wlS_iEL08b6znNJCL8',     // From Google Cloud Console
-            SHEET_NAME: 'Sheet1',                // Your sheet tab name
+            SHEET_ID: '1OQxNLz4IuwsVOSVBTOyvZK-a_9mog81Cns5XGZYBFXU',
+            API_KEY: 'AIzaSyABznAS0fH0tYNh6wlS_iEL08b6znNJCL8',
+            SHEET_NAME: 'Sheet1',
             
             // Google Apps Script Web App URL (from deployment)
             APPS_SCRIPT_URL: 'https://script.google.com/a/macros/staticshift.com.au/s/AKfycbzxJKh00IGljn5RJIFnu_mkb_VS5vyTTuE9TLe3XvFijD_DYNvIQUbr0JVfCsK8fKkh/exec',
             
-            // Column mapping - adjust based on your sheet structure
+            // Column mapping
             COLUMNS: {
-                STATUS: 0,           // Column A
-                AD_NAME: 1,          // Column B
-                CAMPAIGN_ANGLE: 2,   // Column C
-                HEADLINE: 3,         // Column D
-                AD_COPY: 4,          // Column E
-                CREATIVE_ASSETS: 5,  // Column F
-                IMAGE_TEXT: 6,       // Column G
-                NOTES: 7,            // Column H
-                UPDATED_DATE: 8      // Column I
+                STATUS: 0,
+                AD_NAME: 1,
+                CAMPAIGN_ANGLE: 2,
+                HEADLINE: 3,
+                AD_COPY: 4,
+                CREATIVE_ASSETS: 5,
+                IMAGE_TEXT: 6,
+                NOTES: 7,
+                UPDATED_DATE: 8
             }
         };
 
@@ -90,7 +90,6 @@
                     setLoading(true);
                     setError(null);
 
-                    // Validate configuration
                     if (CONFIG.SHEET_ID === 'YOUR_GOOGLE_SHEET_ID' || 
                         CONFIG.API_KEY === 'YOUR_GOOGLE_API_KEY') {
                         throw new Error('Please update the configuration values in the HTML file');
@@ -107,12 +106,10 @@
                     const data = await response.json();
 
                     if (data.values && data.values.length > 0) {
-                        const headers = data.values[0];
                         const rows = data.values.slice(1);
 
-                        // Map rows to ad objects
                         const adsData = rows.map((row, index) => ({
-                            rowIndex: index + 2, // +2 for header row and 0-indexing
+                            rowIndex: index + 2,
                             status: row[CONFIG.COLUMNS.STATUS] || '',
                             adName: row[CONFIG.COLUMNS.AD_NAME] || '',
                             campaignAngle: row[CONFIG.COLUMNS.CAMPAIGN_ANGLE] || '',
@@ -143,18 +140,24 @@
             const updateAdStatus = async (ad, status) => {
                 const notes = editNotes[ad.rowIndex] || '';
                 
-                // Validate Apps Script URL
                 if (CONFIG.APPS_SCRIPT_URL === 'YOUR_APPS_SCRIPT_DEPLOYMENT_URL') {
-                    alert('⚠️ Apps Script URL not configured!\n\nTo enable updates:\n1. Follow the setup instructions\n2. Deploy the Google Apps Script\n3. Update APPS_SCRIPT_URL in the configuration');
+                    alert('⚠️ Apps Script URL not configured!');
                     return;
                 }
 
                 setUpdating(prev => ({ ...prev, [ad.rowIndex]: true }));
 
                 try {
+                    console.log('Sending update request:', {
+                        rowIndex: ad.rowIndex,
+                        status: status,
+                        notes: notes,
+                        url: CONFIG.APPS_SCRIPT_URL
+                    });
+
                     const response = await fetch(CONFIG.APPS_SCRIPT_URL, {
                         method: 'POST',
-                        mode: 'no-cors', // Required for Google Apps Script
+                        mode: 'no-cors',
                         headers: {
                             'Content-Type': 'application/json',
                         },
@@ -166,20 +169,16 @@
                         })
                     });
 
-                    // Due to no-cors mode, we can't read the response
-                    // But we can assume success and update UI optimistically
+                    console.log('Update request sent');
                     
-                    // Remove from UI
                     setAds(ads.filter(a => a.rowIndex !== ad.rowIndex));
                     
-                    // Clear notes
                     setEditNotes(prev => {
                         const updated = { ...prev };
                         delete updated[ad.rowIndex];
                         return updated;
                     });
 
-                    // Show success message
                     showNotification('✓ Update sent successfully!', 'success');
 
                 } catch (err) {
@@ -242,10 +241,7 @@
                         gap: '20px'
                     }}>
                         <div className="spinner"></div>
-                        <div style={{
-                            fontSize: '18px',
-                            color: '#666'
-                        }}>
+                        <div style={{ fontSize: '18px', color: '#666' }}>
                             Loading your ads...
                         </div>
                     </div>
@@ -269,41 +265,12 @@
                             borderRadius: '12px',
                             boxShadow: '0 4px 12px rgba(0,0,0,0.1)'
                         }}>
-                            <div style={{
-                                fontSize: '48px',
-                                marginBottom: '16px'
-                            }}>
-                                ⚠️
-                            </div>
-                            <h2 style={{
-                                fontSize: '24px',
-                                marginBottom: '16px',
-                                color: '#ef4444'
-                            }}>
+                            <div style={{ fontSize: '48px', marginBottom: '16px' }}>⚠️</div>
+                            <h2 style={{ fontSize: '24px', marginBottom: '16px', color: '#ef4444' }}>
                                 Connection Error
                             </h2>
-                            <div style={{ 
-                                color: '#666', 
-                                marginBottom: '20px',
-                                lineHeight: '1.6'
-                            }}>
+                            <div style={{ color: '#666', marginBottom: '20px', lineHeight: '1.6' }}>
                                 {error}
-                            </div>
-                            <div style={{ 
-                                fontSize: '14px', 
-                                color: '#999',
-                                padding: '16px',
-                                backgroundColor: '#f9f9f9',
-                                borderRadius: '8px',
-                                textAlign: 'left'
-                            }}>
-                                <strong>Troubleshooting:</strong>
-                                <ul style={{ marginTop: '8px', paddingLeft: '20px' }}>
-                                    <li>Check that SHEET_ID and API_KEY are configured</li>
-                                    <li>Verify Google Sheets API is enabled</li>
-                                    <li>Ensure the sheet is accessible</li>
-                                    <li>Check browser console for details</li>
-                                </ul>
                             </div>
                         </div>
                     </div>
@@ -319,24 +286,11 @@
                         minHeight: '100vh'
                     }}>
                         <div style={{ textAlign: 'center' }}>
-                            <div style={{
-                                fontSize: '64px',
-                                marginBottom: '16px'
-                            }}>
-                                🎉
-                            </div>
-                            <div style={{
-                                fontSize: '24px',
-                                fontWeight: '600',
-                                marginBottom: '8px',
-                                color: '#1a1a1a'
-                            }}>
+                            <div style={{ fontSize: '64px', marginBottom: '16px' }}>🎉</div>
+                            <div style={{ fontSize: '24px', fontWeight: '600', marginBottom: '8px', color: '#1a1a1a' }}>
                                 All caught up!
                             </div>
-                            <div style={{ 
-                                fontSize: '16px',
-                                color: '#999' 
-                            }}>
+                            <div style={{ fontSize: '16px', color: '#999' }}>
                                 There are no ads pending your review.
                             </div>
                         </div>
@@ -350,11 +304,7 @@
                     backgroundColor: '#f5f5f5',
                     padding: '40px 20px'
                 }}>
-                    <div style={{
-                        maxWidth: '1200px',
-                        margin: '0 auto'
-                    }}>
-                        {/* Header */}
+                    <div style={{ maxWidth: '1200px', margin: '0 auto' }}>
                         <div style={{ marginBottom: '40px' }}>
                             <h1 style={{
                                 fontSize: '32px',
@@ -364,15 +314,11 @@
                             }}>
                                 Meta Ads Approval Portal
                             </h1>
-                            <p style={{
-                                fontSize: '16px',
-                                color: '#666'
-                            }}>
+                            <p style={{ fontSize: '16px', color: '#666' }}>
                                 Review and approve your Facebook ad campaigns · {ads.length} ad{ads.length !== 1 ? 's' : ''} pending
                             </p>
                         </div>
 
-                        {/* Ads Grid */}
                         <div style={{
                             display: 'grid',
                             gridTemplateColumns: 'repeat(auto-fill, minmax(500px, 1fr))',
@@ -386,11 +332,9 @@
                                         borderRadius: '12px',
                                         padding: '24px',
                                         boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
-                                        border: '1px solid #e5e5e5',
-                                        transition: 'box-shadow 0.2s'
+                                        border: '1px solid #e5e5e5'
                                     }}
                                 >
-                                    {/* Campaign Angle Badge */}
                                     {ad.campaignAngle && (
                                         <div style={{
                                             display: 'inline-block',
@@ -406,7 +350,6 @@
                                         </div>
                                     )}
 
-                                    {/* Headline */}
                                     <h3 style={{
                                         fontSize: '18px',
                                         fontWeight: '600',
@@ -417,7 +360,6 @@
                                         {ad.headline || 'No headline provided'}
                                     </h3>
 
-                                    {/* Ad Copy */}
                                     <div style={{
                                         fontSize: '14px',
                                         color: '#4a4a4a',
@@ -427,12 +369,13 @@
                                         backgroundColor: '#f9f9f9',
                                         borderRadius: '8px',
                                         maxHeight: '150px',
-                                        overflowY: 'auto'
+                                        overflowY: 'auto',
+                                        whiteSpace: 'pre-wrap',
+                                        wordWrap: 'break-word'
                                     }}>
                                         {ad.adCopy || 'No ad copy provided'}
                                     </div>
 
-                                    {/* Creative Asset */}
                                     <div style={{
                                         marginBottom: '20px',
                                         backgroundColor: '#f5f5f5',
@@ -456,25 +399,14 @@
                                                         borderRadius: '4px',
                                                         display: 'block',
                                                         margin: '0 auto',
-                                                        transition: 'opacity 0.2s',
                                                         cursor: 'pointer'
                                                     }}
                                                     onError={() => handleImageError(ad.rowIndex)}
-                                                    onMouseOver={(e) => e.target.style.opacity = '0.85'}
-                                                    onMouseOut={(e) => e.target.style.opacity = '1'}
                                                 />
                                             </a>
                                         ) : ad.creativeAsset && imageErrors[ad.rowIndex] ? (
                                             <div style={{ padding: '40px', color: '#ef4444' }}>
-                                                <div style={{ marginBottom: '8px' }}>
-                                                    <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                                        <circle cx="12" cy="12" r="10" />
-                                                        <line x1="12" y1="8" x2="12" y2="12" />
-                                                        <line x1="12" y1="16" x2="12.01" y2="16" />
-                                                    </svg>
-                                                </div>
                                                 <div style={{ fontSize: '14px', fontWeight: '500' }}>Failed to load image</div>
-                                                <div style={{ fontSize: '12px', marginTop: '4px', color: '#999' }}>Check file permissions or URL</div>
                                                 <a 
                                                     href={ad.creativeAsset} 
                                                     target="_blank" 
@@ -499,22 +431,6 @@
                                         )}
                                     </div>
 
-                                    {/* Image Text */}
-                                    {ad.imageText && (
-                                        <div style={{
-                                            fontSize: '13px',
-                                            color: '#666',
-                                            fontStyle: 'italic',
-                                            marginBottom: '16px',
-                                            padding: '8px',
-                                            backgroundColor: '#f9f9f9',
-                                            borderRadius: '4px'
-                                        }}>
-                                            <strong>Image text:</strong> {ad.imageText}
-                                        </div>
-                                    )}
-
-                                    {/* Notes Input */}
                                     <textarea
                                         placeholder="Add notes or feedback (optional)..."
                                         value={editNotes[ad.rowIndex] || ''}
@@ -534,7 +450,6 @@
                                         }}
                                     />
 
-                                    {/* Action Buttons */}
                                     <div style={{
                                         display: 'grid',
                                         gridTemplateColumns: '1fr 1fr 1fr',
@@ -551,12 +466,8 @@
                                                 borderRadius: '8px',
                                                 fontSize: '14px',
                                                 fontWeight: '600',
-                                                cursor: updating[ad.rowIndex] ? 'not-allowed' : 'pointer',
-                                                transition: 'all 0.2s',
-                                                opacity: updating[ad.rowIndex] ? 0.6 : 1
+                                                cursor: updating[ad.rowIndex] ? 'not-allowed' : 'pointer'
                                             }}
-                                            onMouseOver={(e) => !updating[ad.rowIndex] && (e.target.style.backgroundColor = '#059669')}
-                                            onMouseOut={(e) => !updating[ad.rowIndex] && (e.target.style.backgroundColor = '#10b981')}
                                         >
                                             {updating[ad.rowIndex] ? '...' : '✓ Approve'}
                                         </button>
@@ -571,12 +482,8 @@
                                                 borderRadius: '8px',
                                                 fontSize: '14px',
                                                 fontWeight: '600',
-                                                cursor: updating[ad.rowIndex] ? 'not-allowed' : 'pointer',
-                                                transition: 'all 0.2s',
-                                                opacity: updating[ad.rowIndex] ? 0.6 : 1
+                                                cursor: updating[ad.rowIndex] ? 'not-allowed' : 'pointer'
                                             }}
-                                            onMouseOver={(e) => !updating[ad.rowIndex] && (e.target.style.backgroundColor = '#d97706')}
-                                            onMouseOut={(e) => !updating[ad.rowIndex] && (e.target.style.backgroundColor = '#f59e0b')}
                                         >
                                             {updating[ad.rowIndex] ? '...' : '✏️ Edit'}
                                         </button>
@@ -591,12 +498,8 @@
                                                 borderRadius: '8px',
                                                 fontSize: '14px',
                                                 fontWeight: '600',
-                                                cursor: updating[ad.rowIndex] ? 'not-allowed' : 'pointer',
-                                                transition: 'all 0.2s',
-                                                opacity: updating[ad.rowIndex] ? 0.6 : 1
+                                                cursor: updating[ad.rowIndex] ? 'not-allowed' : 'pointer'
                                             }}
-                                            onMouseOver={(e) => !updating[ad.rowIndex] && (e.target.style.backgroundColor = '#dc2626')}
-                                            onMouseOut={(e) => !updating[ad.rowIndex] && (e.target.style.backgroundColor = '#ef4444')}
                                         >
                                             {updating[ad.rowIndex] ? '...' : '✗ Reject'}
                                         </button>
@@ -639,7 +542,6 @@
             );
         };
 
-        // Render the app
         const root = ReactDOM.createRoot(document.getElementById('root'));
         root.render(<AdApprovalPortal />);
     </script>
