@@ -80,13 +80,65 @@
             const [editNotes, setEditNotes] = useState({});
             const [updating, setUpdating] = useState({});
             const [imageErrors, setImageErrors] = useState({});
+            const [activeTab, setActiveTab] = useState('pending');
+            const [actionedAds, setActionedAds] = useState({
+                approved: [],
+                needsEdit: [],
+                rejected: []
+            });
 
             useEffect(() => {
                 fetchAds();
+                loadActionedAds();
             }, []);
 
-            const fetchAds = async () => {
+            const loadActionedAds = () => {
+                const stored = localStorage.getItem('actionedAds');
+                if (stored) {
+                    setActionedAds(JSON.parse(stored));
+                }
+            };
+
+            const saveActionedAd = (ad, status, notes) => {
+                const actionedAd = {
+                    ...ad,
+                    actionStatus: status,
+                    actionNotes: notes,
+                    actionDate: new Date().toISOString()
+                };
+
+                setActionedAds(prev => {
+                    const updated = { ...prev };
+                    const key = status === 'Approved' ? 'approved' : 
+                                status === 'Needs Edit' ? 'needsEdit' : 'rejected';
+                    updated[key] = [actionedAd, ...updated[key]];
+                    localStorage.setItem('actionedAds', JSON.stringify(updated));
+                    return updated;
+                });
+            };
+
+            const fetchAds = async (useCache = true) => {
                 try {
+                    // Load from cache immediately if available
+                    if (useCache) {
+                        const cached = localStorage.getItem('cachedAds');
+                        if (cached) {
+                            try {
+                                const { ads: cachedAds, timestamp } = JSON.parse(cached);
+                                // Use cache if less than 2 minutes old
+                                if (Date.now() - timestamp < 120000) {
+                                    setAds(cachedAds);
+                                    setLoading(false);
+                                    // Fetch fresh data in background
+                                    fetchAds(false);
+                                    return;
+                                }
+                            } catch (e) {
+                                // Invalid cache, continue to fetch
+                            }
+                        }
+                    }
+
                     setLoading(true);
                     setError(null);
 
@@ -125,6 +177,12 @@
                         );
 
                         setAds(adsData);
+                        
+                        // Cache the fresh data
+                        localStorage.setItem('cachedAds', JSON.stringify({
+                            ads: adsData,
+                            timestamp: Date.now()
+                        }));
                     } else {
                         setAds([]);
                     }
@@ -171,7 +229,18 @@
 
                     console.log('Update request sent');
                     
-                    setAds(ads.filter(a => a.rowIndex !== ad.rowIndex));
+                    // Save to actioned ads
+                    saveActionedAd(ad, status, notes);
+                    
+                    // Instantly remove from view
+                    const updatedAds = ads.filter(a => a.rowIndex !== ad.rowIndex);
+                    setAds(updatedAds);
+                    
+                    // Update cache
+                    localStorage.setItem('cachedAds', JSON.stringify({
+                        ads: updatedAds,
+                        timestamp: Date.now()
+                    }));
                     
                     setEditNotes(prev => {
                         const updated = { ...prev };
@@ -230,6 +299,296 @@
                 }));
             };
 
+            const formatDate = (isoString) => {
+                const date = new Date(isoString);
+                const now = new Date();
+                const diffMs = now - date;
+                const diffMins = Math.floor(diffMs / 60000);
+                const diffHours = Math.floor(diffMs / 3600000);
+                const diffDays = Math.floor(diffMs / 86400000);
+
+                if (diffMins < 1) return 'Just now';
+                if (diffMins < 60) return `${diffMins} min${diffMins !== 1 ? 's' : ''} ago`;
+                if (diffHours < 24) return `${diffHours} hour${diffHours !== 1 ? 's' : ''} ago`;
+                if (diffDays < 7) return `${diffDays} day${diffDays !== 1 ? 's' : ''} ago`;
+                
+                return date.toLocaleDateString('en-AU', { 
+                    day: 'numeric', 
+                    month: 'short', 
+                    year: 'numeric' 
+                });
+            };
+
+            const clearHistory = async (type) => {
+                const typeLabel = type === 'approved' ? 'Approved' : type === 'needsEdit' ? 'Needs Edit' : 'Rejected';
+                
+                if (!confirm(`Are you sure you want to revert all ${typeLabel} ads back to "For Review"?`)) {
+                    return;
+                }
+
+                const adsToRevert = actionedAds[type];
+                
+                if (adsToRevert.length === 0) return;
+
+                setUpdating({ reverting: true });
+
+                try {
+                    // Revert each ad back to "For Review" status
+                    const revertPromises = adsToRevert.map(ad => 
+                        fetch(CONFIG.APPS_SCRIPT_URL, {
+                            method: 'POST',
+                            mode: 'no-cors',
+                            headers: {
+                                'Content-Type': 'application/json',
+                            },
+                            body: JSON.stringify({
+                                rowIndex: ad.rowIndex,
+                                status: 'For Review',
+                                notes: '',
+                                timestamp: new Date().toISOString()
+                            })
+                        })
+                    );
+
+                    await Promise.all(revertPromises);
+
+                    // Clear local storage
+                    setActionedAds(prev => {
+                        const updated = { ...prev, [type]: [] };
+                        localStorage.setItem('actionedAds', JSON.stringify(updated));
+                        return updated;
+                    });
+
+                    showNotification(`✓ ${adsToRevert.length} ad${adsToRevert.length !== 1 ? 's' : ''} reverted to "For Review"`, 'success');
+                    
+                    // Switch to pending tab to see the reverted ads
+                    setActiveTab('pending');
+                    
+                    // Refresh the pending ads list immediately
+                    fetchAds(false);
+
+                } catch (err) {
+                    console.error('Error reverting ads:', err);
+                    showNotification('✗ Failed to revert some ads. Please try again.', 'error');
+                } finally {
+                    setUpdating({});
+                }
+            };
+
+            const renderAdCard = (ad, showActions = true) => (
+                <div
+                    key={ad.rowIndex}
+                    style={{
+                        backgroundColor: 'white',
+                        borderRadius: '12px',
+                        padding: '24px',
+                        boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
+                        border: '1px solid #e5e5e5'
+                    }}
+                >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
+                        {ad.campaignAngle && (
+                            <div style={{
+                                display: 'inline-block',
+                                backgroundColor: '#f0f0f0',
+                                padding: '4px 12px',
+                                borderRadius: '12px',
+                                fontSize: '12px',
+                                fontWeight: '500',
+                                color: '#666'
+                            }}>
+                                {ad.campaignAngle}
+                            </div>
+                        )}
+                        {ad.actionDate && (
+                            <div style={{
+                                fontSize: '12px',
+                                color: '#999'
+                            }}>
+                                {formatDate(ad.actionDate)}
+                            </div>
+                        )}
+                    </div>
+
+                    <h3 style={{
+                        fontSize: '18px',
+                        fontWeight: '600',
+                        color: '#1a1a1a',
+                        marginBottom: '12px',
+                        lineHeight: '1.4'
+                    }}>
+                        {ad.headline || 'No headline provided'}
+                    </h3>
+
+                    <div style={{
+                        fontSize: '14px',
+                        color: '#4a4a4a',
+                        lineHeight: '1.6',
+                        marginBottom: '16px',
+                        padding: '12px',
+                        backgroundColor: '#f9f9f9',
+                        borderRadius: '8px',
+                        maxHeight: '150px',
+                        overflowY: 'auto',
+                        whiteSpace: 'pre-wrap',
+                        wordWrap: 'break-word'
+                    }}>
+                        {ad.adCopy || 'No ad copy provided'}
+                    </div>
+
+                    <div style={{
+                        marginBottom: '20px',
+                        backgroundColor: '#f5f5f5',
+                        borderRadius: '8px',
+                        padding: '16px',
+                        textAlign: 'center'
+                    }}>
+                        {ad.creativeAsset && !imageErrors[ad.rowIndex] ? (
+                            <a 
+                                href={ad.creativeAsset} 
+                                target="_blank" 
+                                rel="noopener noreferrer"
+                                style={{ cursor: 'pointer', display: 'block' }}
+                            >
+                                <img
+                                    src={ad.creativeAsset}
+                                    alt="Ad creative"
+                                    loading="lazy"
+                                    style={{
+                                        maxWidth: '100%',
+                                        maxHeight: '400px',
+                                        borderRadius: '4px',
+                                        display: 'block',
+                                        margin: '0 auto',
+                                        cursor: 'pointer'
+                                    }}
+                                    onError={() => handleImageError(ad.rowIndex)}
+                                />
+                            </a>
+                        ) : ad.creativeAsset && imageErrors[ad.rowIndex] ? (
+                            <div style={{ padding: '40px', color: '#ef4444' }}>
+                                <div style={{ fontSize: '14px', fontWeight: '500' }}>Failed to load image</div>
+                                <a 
+                                    href={ad.creativeAsset} 
+                                    target="_blank" 
+                                    rel="noopener noreferrer"
+                                    style={{ 
+                                        fontSize: '12px', 
+                                        color: '#3b82f6', 
+                                        marginTop: '8px',
+                                        display: 'inline-block'
+                                    }}
+                                >
+                                    Open link directly
+                                </a>
+                            </div>
+                        ) : (
+                            <div style={{ padding: '40px', color: '#999' }}>
+                                <div style={{ marginBottom: '8px' }}>
+                                    <CameraIcon />
+                                </div>
+                                <div style={{ fontSize: '14px' }}>No creative asset</div>
+                            </div>
+                        )}
+                    </div>
+
+                    {ad.actionNotes && (
+                        <div style={{
+                            padding: '12px',
+                            backgroundColor: '#fffbeb',
+                            borderRadius: '8px',
+                            marginBottom: '16px',
+                            borderLeft: '3px solid #f59e0b'
+                        }}>
+                            <div style={{ fontSize: '12px', fontWeight: '600', color: '#92400e', marginBottom: '4px' }}>
+                                Notes:
+                            </div>
+                            <div style={{ fontSize: '14px', color: '#78350f', whiteSpace: 'pre-wrap' }}>
+                                {ad.actionNotes}
+                            </div>
+                        </div>
+                    )}
+
+                    {showActions && (
+                        <>
+                            <textarea
+                                placeholder="Add notes or feedback (optional)..."
+                                value={editNotes[ad.rowIndex] || ''}
+                                onChange={(e) => handleNotesChange(ad.rowIndex, e.target.value)}
+                                disabled={updating[ad.rowIndex]}
+                                style={{
+                                    width: '100%',
+                                    minHeight: '80px',
+                                    padding: '12px',
+                                    borderRadius: '8px',
+                                    border: '1px solid #e5e5e5',
+                                    fontSize: '14px',
+                                    fontFamily: 'inherit',
+                                    resize: 'vertical',
+                                    marginBottom: '16px',
+                                    opacity: updating[ad.rowIndex] ? 0.5 : 1
+                                }}
+                            />
+
+                            <div style={{
+                                display: 'grid',
+                                gridTemplateColumns: '1fr 1fr 1fr',
+                                gap: '8px'
+                            }}>
+                                <button
+                                    onClick={() => updateAdStatus(ad, 'Approved')}
+                                    disabled={updating[ad.rowIndex]}
+                                    style={{
+                                        padding: '12px 16px',
+                                        backgroundColor: updating[ad.rowIndex] ? '#ccc' : '#10b981',
+                                        color: 'white',
+                                        border: 'none',
+                                        borderRadius: '8px',
+                                        fontSize: '14px',
+                                        fontWeight: '600',
+                                        cursor: updating[ad.rowIndex] ? 'not-allowed' : 'pointer'
+                                    }}
+                                >
+                                    {updating[ad.rowIndex] ? '...' : '✓ Approve'}
+                                </button>
+                                <button
+                                    onClick={() => updateAdStatus(ad, 'Needs Edit')}
+                                    disabled={updating[ad.rowIndex]}
+                                    style={{
+                                        padding: '12px 16px',
+                                        backgroundColor: updating[ad.rowIndex] ? '#ccc' : '#f59e0b',
+                                        color: 'white',
+                                        border: 'none',
+                                        borderRadius: '8px',
+                                        fontSize: '14px',
+                                        fontWeight: '600',
+                                        cursor: updating[ad.rowIndex] ? 'not-allowed' : 'pointer'
+                                    }}
+                                >
+                                    {updating[ad.rowIndex] ? '...' : '✏️ Edit'}
+                                </button>
+                                <button
+                                    onClick={() => updateAdStatus(ad, 'Rejected')}
+                                    disabled={updating[ad.rowIndex]}
+                                    style={{
+                                        padding: '12px 16px',
+                                        backgroundColor: updating[ad.rowIndex] ? '#ccc' : '#ef4444',
+                                        color: 'white',
+                                        border: 'none',
+                                        borderRadius: '8px',
+                                        fontSize: '14px',
+                                        fontWeight: '600',
+                                        cursor: updating[ad.rowIndex] ? 'not-allowed' : 'pointer'
+                                    }}
+                                >
+                                    {updating[ad.rowIndex] ? '...' : '✗ Reject'}
+                                </button>
+                            </div>
+                        </>
+                    )}
+                </div>
+            );
+
             if (loading) {
                 return (
                     <div style={{
@@ -277,26 +636,21 @@
                 );
             }
 
-            if (ads.length === 0) {
-                return (
-                    <div style={{
-                        display: 'flex',
-                        justifyContent: 'center',
-                        alignItems: 'center',
-                        minHeight: '100vh'
-                    }}>
-                        <div style={{ textAlign: 'center' }}>
-                            <div style={{ fontSize: '64px', marginBottom: '16px' }}>🎉</div>
-                            <div style={{ fontSize: '24px', fontWeight: '600', marginBottom: '8px', color: '#1a1a1a' }}>
-                                All caught up!
-                            </div>
-                            <div style={{ fontSize: '16px', color: '#999' }}>
-                                There are no ads pending your review.
-                            </div>
-                        </div>
-                    </div>
-                );
-            }
+            const getCurrentAds = () => {
+                switch(activeTab) {
+                    case 'approved':
+                        return actionedAds.approved;
+                    case 'needsEdit':
+                        return actionedAds.needsEdit;
+                    case 'rejected':
+                        return actionedAds.rejected;
+                    default:
+                        return ads;
+                }
+            };
+
+            const currentAds = getCurrentAds();
+            const totalActioned = actionedAds.approved.length + actionedAds.needsEdit.length + actionedAds.rejected.length;
 
             return (
                 <div style={{
@@ -305,208 +659,198 @@
                     padding: '40px 20px'
                 }}>
                     <div style={{ maxWidth: '1200px', margin: '0 auto' }}>
-                        <div style={{ marginBottom: '40px' }}>
-                            <h1 style={{
-                                fontSize: '32px',
-                                fontWeight: '600',
-                                color: '#1a1a1a',
-                                marginBottom: '8px'
-                            }}>
-                                Meta Ads Approval Portal
-                            </h1>
-                            <p style={{ fontSize: '16px', color: '#666' }}>
-                                Review and approve your Facebook ad campaigns · {ads.length} ad{ads.length !== 1 ? 's' : ''} pending
-                            </p>
-                        </div>
-
-                        <div style={{
-                            display: 'grid',
-                            gridTemplateColumns: 'repeat(auto-fill, minmax(500px, 1fr))',
-                            gap: '24px'
-                        }}>
-                            {ads.map((ad) => (
-                                <div
-                                    key={ad.rowIndex}
+                        {/* Header */}
+                        <div style={{ marginBottom: '24px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                            <div>
+                                <h1 style={{
+                                    fontSize: '32px',
+                                    fontWeight: '600',
+                                    color: '#1a1a1a',
+                                    marginBottom: '8px'
+                                }}>
+                                    Meta Ads Approval Portal
+                                </h1>
+                                <p style={{ fontSize: '16px', color: '#666' }}>
+                                    Review and approve your Facebook ad campaigns
+                                </p>
+                            </div>
+                            {activeTab === 'pending' && (
+                                <button
+                                    onClick={() => fetchAds(false)}
+                                    disabled={loading}
                                     style={{
+                                        padding: '10px 20px',
                                         backgroundColor: 'white',
-                                        borderRadius: '12px',
-                                        padding: '24px',
-                                        boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
-                                        border: '1px solid #e5e5e5'
+                                        color: '#3b82f6',
+                                        border: '1px solid #3b82f6',
+                                        borderRadius: '8px',
+                                        fontSize: '14px',
+                                        fontWeight: '500',
+                                        cursor: loading ? 'not-allowed' : 'pointer',
+                                        opacity: loading ? 0.5 : 1,
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: '8px'
                                     }}
                                 >
-                                    {ad.campaignAngle && (
-                                        <div style={{
-                                            display: 'inline-block',
-                                            backgroundColor: '#f0f0f0',
-                                            padding: '4px 12px',
-                                            borderRadius: '12px',
-                                            fontSize: '12px',
-                                            fontWeight: '500',
-                                            color: '#666',
-                                            marginBottom: '16px'
-                                        }}>
-                                            {ad.campaignAngle}
-                                        </div>
-                                    )}
+                                    <span>{loading ? '⏳' : '🔄'}</span>
+                                    <span>{loading ? 'Refreshing...' : 'Refresh'}</span>
+                                </button>
+                            )}
+                        </div>
 
-                                    <h3 style={{
-                                        fontSize: '18px',
-                                        fontWeight: '600',
-                                        color: '#1a1a1a',
-                                        marginBottom: '12px',
-                                        lineHeight: '1.4'
-                                    }}>
-                                        {ad.headline || 'No headline provided'}
-                                    </h3>
-
-                                    <div style={{
-                                        fontSize: '14px',
-                                        color: '#4a4a4a',
-                                        lineHeight: '1.6',
-                                        marginBottom: '16px',
-                                        padding: '12px',
-                                        backgroundColor: '#f9f9f9',
-                                        borderRadius: '8px',
-                                        maxHeight: '150px',
-                                        overflowY: 'auto',
-                                        whiteSpace: 'pre-wrap',
-                                        wordWrap: 'break-word'
-                                    }}>
-                                        {ad.adCopy || 'No ad copy provided'}
-                                    </div>
-
-                                    <div style={{
-                                        marginBottom: '20px',
-                                        backgroundColor: '#f5f5f5',
-                                        borderRadius: '8px',
-                                        padding: '16px',
-                                        textAlign: 'center'
-                                    }}>
-                                        {ad.creativeAsset && !imageErrors[ad.rowIndex] ? (
-                                            <a 
-                                                href={ad.creativeAsset} 
-                                                target="_blank" 
-                                                rel="noopener noreferrer"
-                                                style={{ cursor: 'pointer', display: 'block' }}
-                                            >
-                                                <img
-                                                    src={ad.creativeAsset}
-                                                    alt="Ad creative"
-                                                    style={{
-                                                        maxWidth: '100%',
-                                                        maxHeight: '400px',
-                                                        borderRadius: '4px',
-                                                        display: 'block',
-                                                        margin: '0 auto',
-                                                        cursor: 'pointer'
-                                                    }}
-                                                    onError={() => handleImageError(ad.rowIndex)}
-                                                />
-                                            </a>
-                                        ) : ad.creativeAsset && imageErrors[ad.rowIndex] ? (
-                                            <div style={{ padding: '40px', color: '#ef4444' }}>
-                                                <div style={{ fontSize: '14px', fontWeight: '500' }}>Failed to load image</div>
-                                                <a 
-                                                    href={ad.creativeAsset} 
-                                                    target="_blank" 
-                                                    rel="noopener noreferrer"
-                                                    style={{ 
-                                                        fontSize: '12px', 
-                                                        color: '#3b82f6', 
-                                                        marginTop: '8px',
-                                                        display: 'inline-block'
-                                                    }}
-                                                >
-                                                    Open link directly
-                                                </a>
-                                            </div>
-                                        ) : (
-                                            <div style={{ padding: '40px', color: '#999' }}>
-                                                <div style={{ marginBottom: '8px' }}>
-                                                    <CameraIcon />
-                                                </div>
-                                                <div style={{ fontSize: '14px' }}>No creative asset</div>
-                                            </div>
-                                        )}
-                                    </div>
-
-                                    <textarea
-                                        placeholder="Add notes or feedback (optional)..."
-                                        value={editNotes[ad.rowIndex] || ''}
-                                        onChange={(e) => handleNotesChange(ad.rowIndex, e.target.value)}
-                                        disabled={updating[ad.rowIndex]}
-                                        style={{
-                                            width: '100%',
-                                            minHeight: '80px',
-                                            padding: '12px',
-                                            borderRadius: '8px',
-                                            border: '1px solid #e5e5e5',
-                                            fontSize: '14px',
-                                            fontFamily: 'inherit',
-                                            resize: 'vertical',
-                                            marginBottom: '16px',
-                                            opacity: updating[ad.rowIndex] ? 0.5 : 1
-                                        }}
-                                    />
-
-                                    <div style={{
-                                        display: 'grid',
-                                        gridTemplateColumns: '1fr 1fr 1fr',
-                                        gap: '8px'
-                                    }}>
-                                        <button
-                                            onClick={() => updateAdStatus(ad, 'Approved')}
-                                            disabled={updating[ad.rowIndex]}
-                                            style={{
-                                                padding: '12px 16px',
-                                                backgroundColor: updating[ad.rowIndex] ? '#ccc' : '#10b981',
-                                                color: 'white',
-                                                border: 'none',
-                                                borderRadius: '8px',
-                                                fontSize: '14px',
-                                                fontWeight: '600',
-                                                cursor: updating[ad.rowIndex] ? 'not-allowed' : 'pointer'
-                                            }}
-                                        >
-                                            {updating[ad.rowIndex] ? '...' : '✓ Approve'}
-                                        </button>
-                                        <button
-                                            onClick={() => updateAdStatus(ad, 'Needs Edit')}
-                                            disabled={updating[ad.rowIndex]}
-                                            style={{
-                                                padding: '12px 16px',
-                                                backgroundColor: updating[ad.rowIndex] ? '#ccc' : '#f59e0b',
-                                                color: 'white',
-                                                border: 'none',
-                                                borderRadius: '8px',
-                                                fontSize: '14px',
-                                                fontWeight: '600',
-                                                cursor: updating[ad.rowIndex] ? 'not-allowed' : 'pointer'
-                                            }}
-                                        >
-                                            {updating[ad.rowIndex] ? '...' : '✏️ Edit'}
-                                        </button>
-                                        <button
-                                            onClick={() => updateAdStatus(ad, 'Rejected')}
-                                            disabled={updating[ad.rowIndex]}
-                                            style={{
-                                                padding: '12px 16px',
-                                                backgroundColor: updating[ad.rowIndex] ? '#ccc' : '#ef4444',
-                                                color: 'white',
-                                                border: 'none',
-                                                borderRadius: '8px',
-                                                fontSize: '14px',
-                                                fontWeight: '600',
-                                                cursor: updating[ad.rowIndex] ? 'not-allowed' : 'pointer'
-                                            }}
-                                        >
-                                            {updating[ad.rowIndex] ? '...' : '✗ Reject'}
-                                        </button>
-                                    </div>
+                        {/* Quick Summary */}
+                        <div style={{
+                            backgroundColor: 'white',
+                            borderRadius: '12px',
+                            padding: '20px',
+                            marginBottom: '24px',
+                            boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
+                            display: 'grid',
+                            gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+                            gap: '16px'
+                        }}>
+                            <div style={{ textAlign: 'center' }}>
+                                <div style={{ fontSize: '28px', fontWeight: '600', color: '#3b82f6' }}>
+                                    {ads.length}
                                 </div>
+                                <div style={{ fontSize: '14px', color: '#666', marginTop: '4px' }}>
+                                    Pending Review
+                                </div>
+                            </div>
+                            <div style={{ textAlign: 'center' }}>
+                                <div style={{ fontSize: '28px', fontWeight: '600', color: '#10b981' }}>
+                                    {actionedAds.approved.length}
+                                </div>
+                                <div style={{ fontSize: '14px', color: '#666', marginTop: '4px' }}>
+                                    Approved
+                                </div>
+                            </div>
+                            <div style={{ textAlign: 'center' }}>
+                                <div style={{ fontSize: '28px', fontWeight: '600', color: '#f59e0b' }}>
+                                    {actionedAds.needsEdit.length}
+                                </div>
+                                <div style={{ fontSize: '14px', color: '#666', marginTop: '4px' }}>
+                                    Needs Edit
+                                </div>
+                            </div>
+                            <div style={{ textAlign: 'center' }}>
+                                <div style={{ fontSize: '28px', fontWeight: '600', color: '#ef4444' }}>
+                                    {actionedAds.rejected.length}
+                                </div>
+                                <div style={{ fontSize: '14px', color: '#666', marginTop: '4px' }}>
+                                    Rejected
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Tabs */}
+                        <div style={{
+                            backgroundColor: 'white',
+                            borderRadius: '12px',
+                            padding: '8px',
+                            marginBottom: '24px',
+                            boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
+                            display: 'flex',
+                            gap: '8px',
+                            flexWrap: 'wrap'
+                        }}>
+                            {[
+                                { id: 'pending', label: 'Pending Review', count: ads.length },
+                                { id: 'approved', label: 'Approved', count: actionedAds.approved.length },
+                                { id: 'needsEdit', label: 'Needs Edit', count: actionedAds.needsEdit.length },
+                                { id: 'rejected', label: 'Rejected', count: actionedAds.rejected.length }
+                            ].map(tab => (
+                                <button
+                                    key={tab.id}
+                                    onClick={() => setActiveTab(tab.id)}
+                                    style={{
+                                        flex: '1',
+                                        minWidth: '120px',
+                                        padding: '12px 16px',
+                                        backgroundColor: activeTab === tab.id ? '#3b82f6' : 'transparent',
+                                        color: activeTab === tab.id ? 'white' : '#666',
+                                        border: 'none',
+                                        borderRadius: '8px',
+                                        fontSize: '14px',
+                                        fontWeight: '600',
+                                        cursor: 'pointer',
+                                        transition: 'all 0.2s',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        gap: '8px'
+                                    }}
+                                >
+                                    <span>{tab.label}</span>
+                                    {tab.count > 0 && (
+                                        <span style={{
+                                            backgroundColor: activeTab === tab.id ? 'rgba(255,255,255,0.2)' : '#e5e5e5',
+                                            padding: '2px 8px',
+                                            borderRadius: '12px',
+                                            fontSize: '12px'
+                                        }}>
+                                            {tab.count}
+                                        </span>
+                                    )}
+                                </button>
                             ))}
                         </div>
+
+                        {/* Revert to For Review Button */}
+                        {activeTab !== 'pending' && currentAds.length > 0 && (
+                            <div style={{ marginBottom: '16px', textAlign: 'right' }}>
+                                <button
+                                    onClick={() => clearHistory(activeTab)}
+                                    disabled={updating.reverting}
+                                    style={{
+                                        padding: '8px 16px',
+                                        backgroundColor: 'white',
+                                        color: '#3b82f6',
+                                        border: '1px solid #3b82f6',
+                                        borderRadius: '8px',
+                                        fontSize: '13px',
+                                        fontWeight: '500',
+                                        cursor: updating.reverting ? 'not-allowed' : 'pointer',
+                                        opacity: updating.reverting ? 0.5 : 1
+                                    }}
+                                >
+                                    {updating.reverting ? '⏳ Reverting...' : '↩️ Revert All to "For Review"'}
+                                </button>
+                            </div>
+                        )}
+
+                        {/* Content Area */}
+                        {currentAds.length === 0 ? (
+                            <div style={{
+                                backgroundColor: 'white',
+                                borderRadius: '12px',
+                                padding: '60px 20px',
+                                textAlign: 'centre',
+                                boxShadow: '0 2px 8px rgba(0,0,0,0.08)'
+                            }}>
+                                <div style={{ fontSize: '64px', marginBottom: '16px' }}>
+                                    {activeTab === 'pending' ? '🎉' : '📭'}
+                                </div>
+                                <div style={{ fontSize: '24px', fontWeight: '600', marginBottom: '8px', color: '#1a1a1a' }}>
+                                    {activeTab === 'pending' ? 'All caught up!' : 'Nothing here yet'}
+                                </div>
+                                <div style={{ fontSize: '16px', color: '#999' }}>
+                                    {activeTab === 'pending' 
+                                        ? 'There are no ads pending your review.' 
+                                        : `No ads have been ${activeTab === 'approved' ? 'approved' : activeTab === 'needsEdit' ? 'marked for editing' : 'rejected'} yet.`
+                                    }
+                                </div>
+                            </div>
+                        ) : (
+                            <div style={{
+                                display: 'grid',
+                                gridTemplateColumns: 'repeat(auto-fill, minmax(500px, 1fr))',
+                                gap: '24px'
+                            }}>
+                                {currentAds.map((ad) => renderAdCard(ad, activeTab === 'pending'))}
+                            </div>
+                        )}
                     </div>
 
                     <style>
@@ -534,6 +878,10 @@
                             @media (max-width: 768px) {
                                 div[style*="gridTemplateColumns"] {
                                     grid-template-columns: 1fr !important;
+                                }
+                                div[style*="display: flex"][style*="justifyContent: space-between"] {
+                                    flex-direction: column !important;
+                                    gap: 16px !important;
                                 }
                             }
                         `}
